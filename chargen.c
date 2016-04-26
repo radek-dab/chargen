@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <getopt.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -31,14 +32,17 @@
 #define DEBUGF(...)
 #endif
 
-const char usage[] =
-"Character Generator by Radosław Dąbrowski\n"
-"Usage: chargen";
-
 volatile sig_atomic_t running = 1;
 
 void handler(int sig);
 void set_signal_handler(void);
+
+struct config {
+	unsigned short port;
+};
+
+void display_usage(void);
+void parse_args(int argc, char *argv[], struct config *cfg);
 
 struct fd_list {
 	struct pollfd *fds;
@@ -50,7 +54,7 @@ void fd_list_add(struct fd_list *fds, int fd, short events);
 void fd_list_remove(struct fd_list *fds, int pos);
 void fd_list_clear(struct fd_list *fds);
 
-void create_socket(struct fd_list *fds);
+void create_socket(struct fd_list *fds, struct config *cfg);
 void destroy_socket(struct fd_list *fds);
 void connect_client(struct fd_list *fds);
 void disconnect_client(struct fd_list *fds, int pos);
@@ -58,18 +62,14 @@ char* create_pattern(void);
 
 int main(int argc, char *argv[])
 {
+	struct config cfg;
 	struct fd_list fds = {};
 	char *pat, *buf;
 	int i, ret;
 
 	set_signal_handler();
-
-	if (argc != 1) {
-		puts(usage);
-		return EXIT_SUCCESS;
-	}
-
-	create_socket(&fds);
+	parse_args(argc, argv, &cfg);
+	create_socket(&fds, &cfg);
 	pat = create_pattern();
 	if ((buf = malloc(BUFSIZE)) == NULL)
 		ERROR("malloc");
@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
 						continue;
 					}
 					if (errno == EINTR) break;
-					ERROR("write");
+					ERROR("write"); // FIXME: Connection reset by peer
 				}
 			}
 		}
@@ -139,6 +139,47 @@ void set_signal_handler(void)
 	sa.sa_handler = SIG_IGN;
 	if (sigaction(SIGPIPE, &sa, NULL) == -1)
 		ERROR("sigaction");
+}
+
+void display_usage(void)
+{
+	puts("Character Generator by Radosław Dąbrowski\n"
+	     "Usage: chargen [OPTION]...\n"
+	     "\n"
+	     "Options:\n"
+	     "  -p, --port=NUM  set port number\n"
+	     "  -h, --help      display this help and exit");
+
+	exit(EXIT_SUCCESS);
+}
+
+void parse_args(int argc, char *argv[], struct config *cfg)
+{
+	assert(cfg != NULL);
+
+	static const char optstring[] = "p:h";
+	static const struct option longopts[] = {
+		{"port", required_argument, NULL, 'p'},
+		{"help", no_argument, NULL, 'h'},
+		{}
+	};
+	int ret;
+
+	cfg->port = DEFPORT;
+
+	while ((ret = getopt_long(argc, argv,
+				  optstring, longopts, NULL)) != -1) {
+		switch (ret) {
+			case 'p':
+				if (sscanf(optarg, "%hu", &cfg->port) != 1)
+					display_usage();
+				break;
+			default:
+				display_usage();
+		}
+	}
+	if (optind < argc)
+		display_usage();
 }
 
 void fd_list_add(struct fd_list *fds, int fd, short events)
@@ -189,12 +230,12 @@ void fd_list_clear(struct fd_list *fds)
 	fds->cap = 0;
 }
 
-void create_socket(struct fd_list *fds)
+void create_socket(struct fd_list *fds, struct config *cfg)
 {
 	assert(fds != NULL);
 	assert(fds->num == 0);
 
-	struct sockaddr_in addr = {AF_INET, htons(DEFPORT), {INADDR_ANY}};
+	struct sockaddr_in addr = {AF_INET, htons(cfg->port), {INADDR_ANY}};
 	int fd;
 
 	if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
