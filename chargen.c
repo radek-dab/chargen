@@ -32,8 +32,13 @@
 #endif
 
 const char usage[] =
-"chargen by Radosław Dąbrowski\n"
+"Character Generator by Radosław Dąbrowski\n"
 "Usage: chargen";
+
+volatile sig_atomic_t running = 1;
+
+void handler(int sig);
+void set_signal_handler(void);
 
 struct fd_list {
 	struct pollfd *fds;
@@ -44,11 +49,6 @@ struct fd_list {
 void fd_list_add(struct fd_list *fds, int fd, short events);
 void fd_list_remove(struct fd_list *fds, int pos);
 void fd_list_clear(struct fd_list *fds);
-
-volatile sig_atomic_t running = 1;
-
-void handler(int sig);
-void set_signal_handler(void);
 
 void create_socket(struct fd_list *fds);
 void destroy_socket(struct fd_list *fds);
@@ -63,6 +63,12 @@ int main(int argc, char *argv[])
 	int i, ret;
 
 	set_signal_handler();
+
+	if (argc != 1) {
+		puts(usage);
+		return EXIT_SUCCESS;
+	}
+
 	create_socket(&fds);
 	pat = create_pattern();
 	if ((buf = malloc(BUFSIZE)) == NULL)
@@ -112,7 +118,27 @@ int main(int argc, char *argv[])
 	destroy_socket(&fds);
 	free(pat);
 	free(buf);
-	return 0;
+	return EXIT_SUCCESS;
+}
+
+void handler(int sig)
+{
+	running = 0;
+}
+
+void set_signal_handler(void)
+{
+	struct sigaction sa = {};
+
+	sa.sa_handler = handler;
+	if (sigaction(SIGINT, &sa, NULL) == -1)
+		ERROR("sigaction");
+	if (sigaction(SIGTERM, &sa, NULL) == -1)
+		ERROR("sigaction");
+
+	sa.sa_handler = SIG_IGN;
+	if (sigaction(SIGPIPE, &sa, NULL) == -1)
+		ERROR("sigaction");
 }
 
 void fd_list_add(struct fd_list *fds, int fd, short events)
@@ -161,26 +187,6 @@ void fd_list_clear(struct fd_list *fds)
 
 	fds->num = 0;
 	fds->cap = 0;
-}
-
-void handler(int sig)
-{
-	running = 0;
-}
-
-void set_signal_handler(void)
-{
-	struct sigaction sa = {};
-
-	sa.sa_handler = handler;
-	if (sigaction(SIGINT, &sa, NULL) == -1)
-		ERROR("sigaction");
-	if (sigaction(SIGTERM, &sa, NULL) == -1)
-		ERROR("sigaction");
-
-	sa.sa_handler = SIG_IGN;
-	if (sigaction(SIGPIPE, &sa, NULL) == -1)
-		ERROR("sigaction");
 }
 
 void create_socket(struct fd_list *fds)
