@@ -240,14 +240,12 @@ void create_socket(struct fd_list *fds, struct config *cfg)
 
 	if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
 		ERROR("socket");
-
 	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
 		ERROR("bind");
-
 	if (listen(fd, BACKLOG) == -1)
 		ERROR("listen");
-
 	fd_list_add(fds, fd, POLLIN);
+	printf("Listening on port %hu\n", cfg->port);
 }
 
 void destroy_socket(struct fd_list *fds)
