@@ -91,11 +91,16 @@ int main(int argc, char *argv[])
 
 			if (fds.fds[i].revents & POLLIN) {
 				ret = read(fds.fds[i].fd, buf, BUFSIZE);
+				// TODO: Resume after signal interruption
 				if (ret == 0) {
 					disconnect_client(&fds, i--);
 					continue;
 				}
 				if (ret == -1) {
+					if (errno == ECONNRESET) {
+						disconnect_client(&fds, i--);
+						continue;
+					}
 					if (errno == EINTR) break;
 					ERROR("read");
 				}
@@ -103,13 +108,15 @@ int main(int argc, char *argv[])
 
 			if (fds.fds[i].revents & POLLOUT) {
 				ret = write(fds.fds[i].fd, pat, PATSIZE);
+				// TODO: Resume after signal interruption
 				if (ret == -1) {
-					if (errno == EPIPE) {
+					if (errno == EPIPE ||
+					    errno == ECONNRESET) {
 						disconnect_client(&fds, i--);
 						continue;
 					}
 					if (errno == EINTR) break;
-					ERROR("write"); // FIXME: Connection reset by peer
+					ERROR("write");
 				}
 			}
 		}
