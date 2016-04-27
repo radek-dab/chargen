@@ -234,6 +234,7 @@ void create_socket(struct fd_list *fds, struct config *cfg)
 {
 	assert(fds != NULL);
 	assert(fds->num == 0);
+	assert(cfg != NULL);
 
 	struct sockaddr_in addr = {AF_INET, htons(cfg->port), {INADDR_ANY}};
 	int fd;
