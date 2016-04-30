@@ -244,15 +244,23 @@ void create_socket(struct fd_list *fds, struct config *cfg)
 	assert(cfg != NULL);
 
 	struct sockaddr_in addr = {AF_INET, htons(cfg->port), {INADDR_ANY}};
-	int fd;
+	int reuseaddr = 1, fd;
 
 	if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
 		ERROR("socket");
+
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+		       &reuseaddr, sizeof(reuseaddr)) == -1)
+		ERROR("setsockopt");
+
 	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
 		ERROR("bind");
+
 	if (listen(fd, BACKLOG) == -1)
 		ERROR("listen");
+
 	fd_list_add(fds, fd, POLLIN);
+
 	printf("Listening on port %hu\n", cfg->port);
 }
 
