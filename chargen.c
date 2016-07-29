@@ -312,9 +312,11 @@ void connect_client(struct server *svr)
 	if ((fd = accept(svr->lst.fds[0].fd, &addr, &addrlen)) == -1)
 		ERROR("accept");
 
-	printf("%s:%hu connected\n",
+	printf("%s:%hu connected, %d active client%s\n",
 	       inet_ntoa(addr.sin_addr),
-	       ntohs(addr.sin_port));
+	       ntohs(addr.sin_port),
+	       svr->lst.num,
+	       svr->lst.num == 1 ? "" : "s");
 
 	socklist_add(&svr->lst, fd, POLLIN|POLLOUT, &addr);
 }
@@ -327,9 +329,11 @@ void disconnect_client(struct server *svr, int pos)
 	if (TEMP_FAILURE_RETRY(close(svr->lst.fds[pos].fd)) == -1)
 		ERROR("close");
 
-	printf("%s:%hu disconnected\n",
+	printf("%s:%hu disconnected, %d active client%s\n",
 	       inet_ntoa(svr->lst.addrs[pos].sin_addr),
-	       ntohs(svr->lst.addrs[pos].sin_port));
+	       ntohs(svr->lst.addrs[pos].sin_port),
+	       svr->lst.num-2,
+	       svr->lst.num-2 == 1 ? "" : "s");
 
 	socklist_remove(&svr->lst, pos);
 }
