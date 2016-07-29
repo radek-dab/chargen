@@ -15,7 +15,7 @@
 
 #define DEFPORT 1919
 #define BACKLOG 5
-#define SVRCHUNK 1024
+#define LSTCHUNK 1024
 #define CHSETBEG ' '
 #define CHSETEND '~'
 #define FIRSTCH '!'
@@ -45,12 +45,21 @@ struct config {
 void display_usage(void);
 void parse_args(int argc, char *argv[], struct config *cfg);
 
-struct server {
-	struct config cfg;
+struct socklist {
 	struct pollfd *fds;
 	struct sockaddr_in *addrs;
 	int num;
 	int cap;
+};
+
+void socklist_add(struct socklist *lst,
+		  int fd, short events, struct sockaddr_in *addr);
+void socklist_remove(struct socklist *lst, int pos);
+void socklist_clear(struct socklist *lst);
+
+struct server {
+	struct config cfg;
+	struct socklist lst;
 };
 
 void create_server(struct server *svr);
@@ -73,22 +82,22 @@ int main(int argc, char *argv[])
 		ERROR("malloc");
 
 	while (running) {
-		if (poll(svr.fds, svr.num, -1) == -1) {
+		if (poll(svr.lst.fds, svr.lst.num, -1) == -1) {
 			if (errno == EINTR) continue;
 			ERROR("poll");
 		}
 
-		if (svr.fds[0].revents & POLLIN)
+		if (svr.lst.fds[0].revents & POLLIN)
 			connect_client(&svr);
 
-		for (i = 1; i < svr.num; i++) {
-			if (svr.fds[i].revents & POLLHUP) {
+		for (i = 1; i < svr.lst.num; i++) {
+			if (svr.lst.fds[i].revents & POLLHUP) {
 				disconnect_client(&svr, i--);
 				continue;
 			}
 
-			if (svr.fds[i].revents & POLLIN) {
-				ret = read(svr.fds[i].fd, buf, BUFSIZE);
+			if (svr.lst.fds[i].revents & POLLIN) {
+				ret = read(svr.lst.fds[i].fd, buf, BUFSIZE);
 				if (ret == 0) {
 					disconnect_client(&svr, i--);
 					continue;
@@ -103,8 +112,8 @@ int main(int argc, char *argv[])
 				}
 			}
 
-			if (svr.fds[i].revents & POLLOUT) {
-				ret = write(svr.fds[i].fd, pat, PATSIZE);
+			if (svr.lst.fds[i].revents & POLLOUT) {
+				ret = write(svr.lst.fds[i].fd, pat, PATSIZE);
 				// TODO: Resume after signal interruption
 				if (ret == -1) {
 					if (errno == EPIPE ||
@@ -186,6 +195,71 @@ void parse_args(int argc, char *argv[], struct config *cfg)
 		display_usage();
 }
 
+void socklist_add(struct socklist *lst,
+		  int fd, short events, struct sockaddr_in *addr)
+{
+	assert(lst != NULL);
+
+	if (++lst->num > lst->cap) {
+		lst->cap += LSTCHUNK;
+
+		if ((lst->fds = realloc(lst->fds, lst->cap *
+					sizeof(struct pollfd))) == NULL)
+			ERROR("realloc");
+
+		if ((lst->addrs = realloc(lst->addrs, lst->cap *
+					  sizeof(struct sockaddr_in))) == NULL)
+			ERROR("realloc");
+	}
+
+	lst->fds[lst->num-1].fd      = fd;
+	lst->fds[lst->num-1].events  = events;
+	lst->fds[lst->num-1].revents = 0;
+	memcpy(&lst->addrs[lst->num-1], addr, sizeof(struct sockaddr_in));
+}
+
+void socklist_remove(struct socklist *lst, int pos)
+{
+	assert(lst != NULL);
+	assert(0 <= pos && pos < lst->num);
+
+	if (pos != lst->num-1) {
+		lst->fds[pos].fd      = lst->fds[lst->num-1].fd;
+		lst->fds[pos].events  = lst->fds[lst->num-1].events;
+		lst->fds[pos].revents = lst->fds[lst->num-1].revents;
+		memcpy(&lst->addrs[pos], &lst->addrs[lst->num-1],
+		       sizeof(struct sockaddr_in));
+	}
+
+	if (--lst->num <= lst->cap-2*LSTCHUNK) {
+		lst->cap -= LSTCHUNK;
+
+		if ((lst->fds = realloc(lst->fds, lst->cap *
+					sizeof(struct pollfd))) == NULL)
+			ERROR("realloc");
+
+		if ((lst->addrs = realloc(lst->addrs, lst->cap *
+					  sizeof(struct sockaddr_in))) == NULL)
+			ERROR("realloc");
+	}
+}
+
+void socklist_clear(struct socklist *lst)
+{
+	assert(lst != NULL);
+
+	if (lst->fds != NULL) {
+		free(lst->fds);
+		lst->fds = NULL;
+	}
+	if (lst->addrs != NULL) {
+		free(lst->addrs);
+		lst->addrs = NULL;
+	}
+	lst->num = 0;
+	lst->cap = 0;
+}
+
 void create_server(struct server *svr)
 {
 	assert(svr != NULL);
@@ -209,17 +283,7 @@ void create_server(struct server *svr)
 	if (listen(fd, BACKLOG) == -1)
 		ERROR("listen");
 
-	svr->num = 1;
-	svr->cap = SVRCHUNK;
-	if ((svr->fds = malloc(svr->cap*sizeof(struct pollfd))) == NULL)
-		ERROR("malloc");
-	if ((svr->addrs = malloc(svr->cap*sizeof(struct sockaddr_in))) == NULL)
-		ERROR("malloc");
-
-	svr->fds[0].fd = fd;
-	svr->fds[0].events = POLLIN;
-	svr->fds[0].revents = 0;
-	memcpy(&svr->addrs[0], &addr, sizeof(addr));
+	socklist_add(&svr->lst, fd, POLLIN, &addr);
 
 	printf("Listening on port %hu\n", svr->cfg.port);
 }
@@ -230,14 +294,11 @@ void destroy_server(struct server *svr)
 
 	int i;
 
-	for (i = 0; i < svr->num; i++)
-		if (TEMP_FAILURE_RETRY(close(svr->fds[i].fd)) == -1)
+	for (i = 0; i < svr->lst.num; i++)
+		if (TEMP_FAILURE_RETRY(close(svr->lst.fds[i].fd)) == -1)
 			ERROR("close");
 
-	free(svr->fds);
-	free(svr->addrs);
-	svr->num = 0;
-	svr->cap = 0;
+	socklist_clear(&svr->lst);
 }
 
 void connect_client(struct server *svr)
@@ -248,62 +309,29 @@ void connect_client(struct server *svr)
 	socklen_t addrlen = sizeof(addr);
 	int fd;
 
-	if ((fd = accept(svr->fds[0].fd, &addr, &addrlen)) == -1)
+	if ((fd = accept(svr->lst.fds[0].fd, &addr, &addrlen)) == -1)
 		ERROR("accept");
 
 	printf("%s:%hu connected\n",
 	       inet_ntoa(addr.sin_addr),
 	       ntohs(addr.sin_port));
 
-	if (++svr->num > svr->cap) {
-		svr->cap += SVRCHUNK;
-
-		svr->fds = realloc(svr->fds,
-				   svr->cap * sizeof(struct pollfd));
-		if (svr->fds == NULL) ERROR("realloc");
-
-		svr->addrs = realloc(svr->addrs,
-				     svr->cap * sizeof(struct sockaddr_in));
-		if (svr->addrs == NULL) ERROR("realloc");
-	}
-
-	svr->fds[svr->num-1].fd = fd;
-	svr->fds[svr->num-1].events = POLLIN|POLLOUT;
-	svr->fds[svr->num-1].revents = 0;
-	memcpy(&svr->addrs[svr->num-1], &addr, sizeof(struct sockaddr_in));
+	socklist_add(&svr->lst, fd, POLLIN|POLLOUT, &addr);
 }
 
 void disconnect_client(struct server *svr, int pos)
 {
 	assert(svr != NULL);
-	assert(0 <= pos && pos < svr->num);
+	assert(0 <= pos && pos < svr->lst.num);
 
-	if (TEMP_FAILURE_RETRY(close(svr->fds[pos].fd)) == -1)
+	if (TEMP_FAILURE_RETRY(close(svr->lst.fds[pos].fd)) == -1)
 		ERROR("close");
 
 	printf("%s:%hu disconnected\n",
-	       inet_ntoa(svr->addrs[pos].sin_addr),
-	       ntohs(svr->addrs[pos].sin_port));
+	       inet_ntoa(svr->lst.addrs[pos].sin_addr),
+	       ntohs(svr->lst.addrs[pos].sin_port));
 
-	if (pos != svr->num-1) {
-		svr->fds[pos].fd      = svr->fds[svr->num-1].fd;
-		svr->fds[pos].events  = svr->fds[svr->num-1].events;
-		svr->fds[pos].revents = svr->fds[svr->num-1].revents;
-		memcpy(&svr->addrs[pos], &svr->addrs[svr->num-1],
-		       sizeof(struct sockaddr_in));
-	}
-
-	if (--svr->num <= svr->cap-2*SVRCHUNK) {
-		svr->cap -= SVRCHUNK;
-
-		svr->fds = realloc(svr->fds,
-				   svr->cap * sizeof(struct pollfd));
-		if (svr->fds == NULL) ERROR("realloc");
-
-		svr->addrs = realloc(svr->addrs,
-				     svr->cap * sizeof(struct sockaddr_in));
-		if (svr->addrs == NULL) ERROR("realloc");
-	}
+	socklist_remove(&svr->lst, pos);
 }
 
 char* create_pattern(void)
