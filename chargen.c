@@ -34,8 +34,10 @@
 #endif
 
 volatile sig_atomic_t running = 1;
+volatile sig_atomic_t listing = 0;
 
-void handler(int sig);
+void set_exiting(int sig);
+void set_listing(int sig);
 void set_signal_handler(void);
 
 struct config {
@@ -66,6 +68,7 @@ void create_server(struct server *svr);
 void destroy_server(struct server *svr);
 void connect_client(struct server *svr);
 void disconnect_client(struct server *svr, int pos);
+void list_clients(struct server *svr);
 char* create_pattern(void);
 
 int main(int argc, char *argv[])
@@ -82,6 +85,11 @@ int main(int argc, char *argv[])
 		ERROR("malloc");
 
 	while (running) {
+		if (listing) {
+			list_clients(&svr);
+			listing = 0;
+		}
+
 		if (poll(svr.lst.fds, svr.lst.num, -1) == -1) {
 			if (errno == EINTR) continue;
 			ERROR("poll");
@@ -134,19 +142,28 @@ int main(int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
-void handler(int sig)
+void set_exiting(int sig)
 {
 	running = 0;
+}
+
+void set_listing(int sig)
+{
+	listing = 1;
 }
 
 void set_signal_handler(void)
 {
 	struct sigaction sa = {};
 
-	sa.sa_handler = handler;
+	sa.sa_handler = set_exiting;
 	if (sigaction(SIGINT, &sa, NULL) == -1)
 		ERROR("sigaction");
 	if (sigaction(SIGTERM, &sa, NULL) == -1)
+		ERROR("sigaction");
+
+	sa.sa_handler = set_listing;
+	if (sigaction(SIGUSR1, &sa, NULL) == -1)
 		ERROR("sigaction");
 
 	sa.sa_handler = SIG_IGN;
@@ -336,6 +353,22 @@ void disconnect_client(struct server *svr, int pos)
 	       svr->lst.num-2 == 1 ? "" : "s");
 
 	socklist_remove(&svr->lst, pos);
+}
+
+void list_clients(struct server *svr)
+{
+	assert(svr != NULL);
+
+	int i;
+
+	printf("%d active client%s\n",
+	       svr->lst.num-1,
+	       svr->lst.num-1 == 1 ? "" : "s");
+
+	for (i = 1; i < svr->lst.num; i++)
+		printf("  %s:%hu\n",
+		       inet_ntoa(svr->lst.addrs[i].sin_addr),
+		       ntohs(svr->lst.addrs[i].sin_port));
 }
 
 char* create_pattern(void)
