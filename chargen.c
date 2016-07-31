@@ -23,6 +23,7 @@
 #define LINENUM (CHSETEND-CHSETBEG+1)
 #define PATSIZE ((LINELEN+2)*LINENUM)
 #define BUFSIZE PATSIZE
+#define SIZELEN 16
 
 #define ERROR(s)	(fprintf(stderr, "%s:%d ", __FILE__, __LINE__), \
 			perror(s), kill(0, SIGTERM), exit(EXIT_FAILURE))
@@ -47,9 +48,15 @@ struct config {
 void display_usage(void);
 void parse_args(int argc, char *argv[], struct config *cfg);
 
+struct sockinfo {
+	struct sockaddr_in addr;
+	size_t rx;
+	size_t tx;
+};
+
 struct socklist {
 	struct pollfd *fds;
-	struct sockaddr_in *addrs;
+	struct sockinfo *infos;
 	int num;
 	int cap;
 };
@@ -70,6 +77,7 @@ void connect_client(struct server *svr);
 void disconnect_client(struct server *svr, int pos);
 void list_clients(struct server *svr);
 char* create_pattern(void);
+char* humanize_size(char *buf, size_t len, size_t size);
 
 int main(int argc, char *argv[])
 {
@@ -118,6 +126,7 @@ int main(int argc, char *argv[])
 					if (errno == EINTR) break;
 					ERROR("read");
 				}
+				svr.lst.infos[i].rx += ret;
 			}
 
 			if (svr.lst.fds[i].revents & POLLOUT) {
@@ -132,6 +141,7 @@ int main(int argc, char *argv[])
 					if (errno == EINTR) break;
 					ERROR("write");
 				}
+				svr.lst.infos[i].tx += ret;
 			}
 		}
 	}
@@ -224,15 +234,17 @@ void socklist_add(struct socklist *lst,
 					sizeof(struct pollfd))) == NULL)
 			ERROR("realloc");
 
-		if ((lst->addrs = realloc(lst->addrs, lst->cap *
-					  sizeof(struct sockaddr_in))) == NULL)
+		if ((lst->infos = realloc(lst->infos, lst->cap *
+					  sizeof(struct sockinfo))) == NULL)
 			ERROR("realloc");
 	}
 
 	lst->fds[lst->num-1].fd      = fd;
 	lst->fds[lst->num-1].events  = events;
 	lst->fds[lst->num-1].revents = 0;
-	memcpy(&lst->addrs[lst->num-1], addr, sizeof(struct sockaddr_in));
+	memcpy(&lst->infos[lst->num-1].addr, addr, sizeof(struct sockaddr_in));
+	lst->infos[lst->num-1].rx = 0;
+	lst->infos[lst->num-1].tx = 0;
 }
 
 void socklist_remove(struct socklist *lst, int pos)
@@ -244,8 +256,8 @@ void socklist_remove(struct socklist *lst, int pos)
 		lst->fds[pos].fd      = lst->fds[lst->num-1].fd;
 		lst->fds[pos].events  = lst->fds[lst->num-1].events;
 		lst->fds[pos].revents = lst->fds[lst->num-1].revents;
-		memcpy(&lst->addrs[pos], &lst->addrs[lst->num-1],
-		       sizeof(struct sockaddr_in));
+		memcpy(&lst->infos[pos], &lst->infos[lst->num-1],
+		       sizeof(struct sockinfo));
 	}
 
 	if (--lst->num <= lst->cap-2*LSTCHUNK) {
@@ -255,8 +267,8 @@ void socklist_remove(struct socklist *lst, int pos)
 					sizeof(struct pollfd))) == NULL)
 			ERROR("realloc");
 
-		if ((lst->addrs = realloc(lst->addrs, lst->cap *
-					  sizeof(struct sockaddr_in))) == NULL)
+		if ((lst->infos = realloc(lst->infos, lst->cap *
+					  sizeof(struct sockinfo))) == NULL)
 			ERROR("realloc");
 	}
 }
@@ -269,9 +281,9 @@ void socklist_clear(struct socklist *lst)
 		free(lst->fds);
 		lst->fds = NULL;
 	}
-	if (lst->addrs != NULL) {
-		free(lst->addrs);
-		lst->addrs = NULL;
+	if (lst->infos != NULL) {
+		free(lst->infos);
+		lst->infos = NULL;
 	}
 	lst->num = 0;
 	lst->cap = 0;
@@ -347,8 +359,8 @@ void disconnect_client(struct server *svr, int pos)
 		ERROR("close");
 
 	printf("%s:%hu disconnected, %d active client%s\n",
-	       inet_ntoa(svr->lst.addrs[pos].sin_addr),
-	       ntohs(svr->lst.addrs[pos].sin_port),
+	       inet_ntoa(svr->lst.infos[pos].addr.sin_addr),
+	       ntohs(svr->lst.infos[pos].addr.sin_port),
 	       svr->lst.num-2,
 	       svr->lst.num-2 == 1 ? "" : "s");
 
@@ -359,16 +371,21 @@ void list_clients(struct server *svr)
 {
 	assert(svr != NULL);
 
+	char buf[SIZELEN];
 	int i;
 
 	printf("%d active client%s\n",
 	       svr->lst.num-1,
 	       svr->lst.num-1 == 1 ? "" : "s");
 
-	for (i = 1; i < svr->lst.num; i++)
-		printf("  %s:%hu\n",
-		       inet_ntoa(svr->lst.addrs[i].sin_addr),
-		       ntohs(svr->lst.addrs[i].sin_port));
+	for (i = 1; i < svr->lst.num; i++) {
+		struct sockinfo *info = &svr->lst.infos[i];
+		printf("  %s:%hu\t",
+		       inet_ntoa(info->addr.sin_addr),
+		       ntohs(info->addr.sin_port));
+		printf("RX: %s\t", humanize_size(buf, SIZELEN, info->rx));
+		printf("TX: %s\n", humanize_size(buf, SIZELEN, info->tx));
+	}
 }
 
 char* create_pattern(void)
@@ -400,4 +417,22 @@ char* create_pattern(void)
 	}
 
 	return pat;
+}
+
+char* humanize_size(char *buf, size_t len, size_t size)
+{
+	assert(buf != NULL);
+
+	static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB",
+				      "PiB", "EiB", "ZiB", "YiB", NULL};
+	double val = size;
+	int i = 0;
+
+	while (val >= 1024 && units[i+1]) {
+		val /= 1024;
+		i++;
+	}
+	snprintf(buf, len, "%.2lf %s", val, units[i]);
+
+	return buf;
 }
