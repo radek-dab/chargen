@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <pwd.h>
+#include <grp.h>
 #include <getopt.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -24,6 +26,8 @@
 #define PATSIZE ((LINELEN+2)*LINENUM)
 #define BUFSIZE PATSIZE
 #define SIZELEN 16
+#define SAFEUSR "nobody"
+#define SAFEGRP "nobody"
 
 #define ERROR(s)	(fprintf(stderr, "%s:%d ", __FILE__, __LINE__), \
 			perror(s), kill(0, SIGTERM), exit(EXIT_FAILURE))
@@ -40,6 +44,7 @@ volatile sig_atomic_t listing = 0;
 void set_exiting(int sig);
 void set_listing(int sig);
 void set_signal_handler(void);
+void drop_privileges(void);
 
 struct config {
 	unsigned short port;
@@ -88,6 +93,7 @@ int main(int argc, char *argv[])
 	set_signal_handler();
 	parse_args(argc, argv, &svr.cfg);
 	create_server(&svr);
+	drop_privileges();
 	pat = create_pattern();
 	if ((buf = malloc(BUFSIZE)) == NULL)
 		ERROR("malloc");
@@ -179,6 +185,27 @@ void set_signal_handler(void)
 	sa.sa_handler = SIG_IGN;
 	if (sigaction(SIGPIPE, &sa, NULL) == -1)
 		ERROR("sigaction");
+}
+
+void drop_privileges(void)
+{
+	struct group *grp;
+	struct passwd *pwd;
+
+	if (getuid() != 0)
+		return;
+
+	if ((grp = getgrnam(SAFEGRP)) == NULL)
+		ERROR("getgrnam");
+	if (setgid(grp->gr_gid) == -1)
+		ERROR("setgid");
+
+	if ((pwd = getpwnam(SAFEUSR)) == NULL)
+		ERROR("getpwnam");
+	if (setuid(pwd->pw_uid) == -1)
+		ERROR("setuid");
+
+	printf("Dropped privileges\n");
 }
 
 void display_usage(void)
