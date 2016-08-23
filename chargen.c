@@ -74,9 +74,16 @@ void socklist_add(struct socklist *lst,
 void socklist_remove(struct socklist *lst, int pos);
 void socklist_clear(struct socklist *lst);
 
+enum server_list {
+	TCP_SERVICE,
+	CLIENTS_LIST
+};
+
 struct server {
 	struct config cfg;
 	struct socklist lst;
+	char *pat;
+	char *buf;
 };
 
 void create_server(struct server *svr);
@@ -84,22 +91,18 @@ void destroy_server(struct server *svr);
 void connect_client(struct server *svr);
 void disconnect_client(struct server *svr, int pos);
 void list_clients(struct server *svr);
+void serve_clients(struct server *svr);
 char* create_pattern(void);
 char* humanize_size(char *buf, size_t len, size_t size);
 
 int main(int argc, char *argv[])
 {
 	struct server svr = {};
-	char *pat, *buf;
-	int i, ret;
 
 	set_signal_handler();
 	parse_args(argc, argv, &svr.cfg);
 	create_server(&svr);
 	drop_privileges();
-	pat = create_pattern();
-	if ((buf = malloc(BUFSIZE)) == NULL)
-		ERROR("malloc");
 
 	while (running) {
 		if (listing) {
@@ -112,52 +115,13 @@ int main(int argc, char *argv[])
 			ERROR("poll");
 		}
 
-		if (svr.lst.fds[0].revents & POLLIN)
+		if (svr.lst.fds[TCP_SERVICE].revents & POLLIN)
 			connect_client(&svr);
 
-		for (i = 1; i < svr.lst.num; i++) {
-			if (svr.lst.fds[i].revents & POLLHUP) {
-				disconnect_client(&svr, i--);
-				continue;
-			}
-
-			if (svr.lst.fds[i].revents & POLLIN) {
-				ret = read(svr.lst.fds[i].fd, buf, BUFSIZE);
-				if (ret == 0) {
-					disconnect_client(&svr, i--);
-					continue;
-				}
-				if (ret == -1) {
-					if (errno == ECONNRESET) {
-						disconnect_client(&svr, i--);
-						continue;
-					}
-					if (errno == EINTR) break;
-					ERROR("read");
-				}
-				svr.lst.infos[i].rx += ret;
-			}
-
-			if (svr.lst.fds[i].revents & POLLOUT) {
-				ret = write(svr.lst.fds[i].fd, pat, PATSIZE);
-				// TODO: Resume after signal interruption
-				if (ret == -1) {
-					if (errno == EPIPE ||
-					    errno == ECONNRESET) {
-						disconnect_client(&svr, i--);
-						continue;
-					}
-					if (errno == EINTR) break;
-					ERROR("write");
-				}
-				svr.lst.infos[i].tx += ret;
-			}
-		}
+		serve_clients(&svr);
 	}
 
 	destroy_server(&svr);
-	free(pat);
-	free(buf);
 	return EXIT_SUCCESS;
 }
 
@@ -347,6 +311,10 @@ void create_server(struct server *svr)
 
 	socklist_add(&svr->lst, fd, POLLIN, &addr);
 
+	svr->pat = create_pattern();
+	if ((svr->buf = malloc(BUFSIZE)) == NULL)
+		ERROR("malloc");
+
 	printf("Listening on port %hu\n", svr->cfg.port);
 }
 
@@ -361,6 +329,9 @@ void destroy_server(struct server *svr)
 			ERROR("close");
 
 	socklist_clear(&svr->lst);
+
+	free(svr->pat);
+	free(svr->buf);
 }
 
 void connect_client(struct server *svr)
@@ -386,7 +357,7 @@ void connect_client(struct server *svr)
 void disconnect_client(struct server *svr, int pos)
 {
 	assert(svr != NULL);
-	assert(0 <= pos && pos < svr->lst.num);
+	assert(CLIENTS_LIST <= pos && pos < svr->lst.num);
 
 	if (TEMP_FAILURE_RETRY(close(svr->lst.fds[pos].fd)) == -1)
 		ERROR("close");
@@ -404,6 +375,7 @@ void list_clients(struct server *svr)
 {
 	assert(svr != NULL);
 
+	struct sockinfo *info;
 	char buf[SIZELEN];
 	int i;
 
@@ -411,13 +383,59 @@ void list_clients(struct server *svr)
 	       svr->lst.num-1,
 	       svr->lst.num-1 == 1 ? "" : "s");
 
-	for (i = 1; i < svr->lst.num; i++) {
-		struct sockinfo *info = &svr->lst.infos[i];
+	for (i = CLIENTS_LIST; i < svr->lst.num; i++) {
+		info = &svr->lst.infos[i];
 		printf("  %s:%hu\t",
 		       inet_ntoa(info->addr.sin_addr),
 		       ntohs(info->addr.sin_port));
 		printf("RX: %s\t", humanize_size(buf, SIZELEN, info->rx));
 		printf("TX: %s\n", humanize_size(buf, SIZELEN, info->tx));
+	}
+}
+
+void serve_clients(struct server *svr)
+{
+	int i, ret;
+	size_t off;
+
+	for (i = CLIENTS_LIST; i < svr->lst.num; i++) {
+		if (svr->lst.fds[i].revents & POLLHUP) {
+			disconnect_client(svr, i--);
+			continue;
+		}
+
+		if (svr->lst.fds[i].revents & POLLIN) {
+			ret = read(svr->lst.fds[i].fd, svr->buf, BUFSIZE);
+			if (ret == 0) {
+				disconnect_client(svr, i--);
+				continue;
+			}
+			if (ret == -1) {
+				if (errno == ECONNRESET) {
+					disconnect_client(svr, i--);
+					continue;
+				}
+				if (errno == EINTR) break;
+				ERROR("read");
+			}
+			svr->lst.infos[i].rx += ret;
+		}
+
+		if (svr->lst.fds[i].revents & POLLOUT) {
+			off = svr->lst.infos[i].tx % PATSIZE;
+			ret = write(svr->lst.fds[i].fd,
+				    svr->pat + off, PATSIZE - off);
+			if (ret == -1) {
+				if (errno == EPIPE ||
+				    errno == ECONNRESET) {
+					disconnect_client(svr, i--);
+					continue;
+				}
+				if (errno == EINTR) break;
+				ERROR("write");
+			}
+			svr->lst.infos[i].tx += ret;
+		}
 	}
 }
 
