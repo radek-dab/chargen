@@ -15,19 +15,22 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 
-#define DEFPORT 1919
-#define BACKLOG 5
-#define LSTCHUNK 1024
-#define CHSETBEG ' '
-#define CHSETEND '~'
-#define FIRSTCH '!'
-#define LINELEN 72
-#define LINENUM (CHSETEND-CHSETBEG+1)
-#define PATSIZE ((LINELEN+2)*LINENUM)
-#define BUFSIZE PATSIZE
-#define SIZELEN 16
-#define SAFEUSR "nobody"
-#define SAFEGRP "nobody"
+#define DEFPORT		1919
+#define BACKLOG		5
+#define LSTCHUNK	1024
+#define CHSETBEG	' '
+#define CHSETEND	'~'
+#define FIRSTCH		'!'
+#define LINELEN		72
+#define LINENUM		(CHSETEND-CHSETBEG+1)
+#define PATSIZE		((LINELEN+2)*LINENUM)
+#define BUFSIZE		PATSIZE
+#define SIZELEN		16
+#define SAFEUSR		"nobody"
+#define SAFEGRP		"nobody"
+
+#define XSTR(s)		STR(s)
+#define STR(s)		#s
 
 #define ERROR(s)	(fprintf(stderr, "%s:%d ", __FILE__, __LINE__), \
 			perror(s), kill(0, SIGTERM), exit(EXIT_FAILURE))
@@ -214,8 +217,11 @@ void display_usage(void)
 	     "Usage: chargen [OPTION]...\n"
 	     "\n"
 	     "Options:\n"
-	     "  -p, --port=NUM  set port number\n"
-	     "  -h, --help      display this help and exit");
+	     "  -p, --port=NUM  port number (default "XSTR(DEFPORT)")\n"
+	     "  -h, --help      display this help and exit\n"
+	     "\n"
+	     "Send USR1 signal to display list of active clients\n"
+	     "and their transfer statistics.");
 
 	exit(EXIT_SUCCESS);
 }
