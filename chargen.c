@@ -41,6 +41,8 @@
 #define ERROR(s)	(fprintf(stderr, "%s:%d ", __FILE__, __LINE__), \
 			perror(s), kill(0, SIGTERM), exit(EXIT_FAILURE))
 
+#define LOGF(...)	(printf(__VA_ARGS__), fflush(stdout))
+
 #if DEBUG
 #define DEBUGF(...)	fprintf(stderr, __VA_ARGS__)
 #else
@@ -200,7 +202,7 @@ void drop_privileges(void)
 	if (setuid(pwd->pw_uid) == -1)
 		ERROR("setuid");
 
-	printf("Dropped privileges\n");
+	LOGF("Dropped privileges\n");
 }
 
 void display_usage(void)
@@ -367,7 +369,7 @@ void create_server(struct server *svr)
 
 	if (svr->cfg.proto & TCP) {
 		fd = create_socket(SOCK_STREAM, &addr);
-		printf("Started TCP service\n");
+		LOGF("Started TCP service\n");
 	} else {
 		fd = -1;
 	}
@@ -375,7 +377,7 @@ void create_server(struct server *svr)
 
 	if (svr->cfg.proto & UDP) {
 		fd = create_socket(SOCK_DGRAM, &addr);
-		printf("Started UDP service\n");
+		LOGF("Started UDP service\n");
 	} else {
 		fd = -1;
 	}
@@ -385,7 +387,7 @@ void create_server(struct server *svr)
 	if ((svr->buf = malloc(BUFSIZE)) == NULL)
 		ERROR("malloc");
 
-	printf("Listening on port %hu\n", svr->cfg.port);
+	LOGF("Listening on port %hu\n", svr->cfg.port);
 }
 
 void destroy_server(struct server *svr)
@@ -415,11 +417,11 @@ void connect_client(struct server *svr)
 	if ((fd = accept(svr->lst.fds[0].fd, &addr, &addrlen)) == -1)
 		ERROR("accept");
 
-	printf("%s:%hu connected, %d active client%s\n",
-	       inet_ntoa(addr.sin_addr),
-	       ntohs(addr.sin_port),
-	       CLIENTS_NUM(svr)+1,
-	       CLIENTS_NUM(svr)+1 == 1 ? "" : "s");
+	LOGF("%s:%hu connected, %d active client%s\n",
+	     inet_ntoa(addr.sin_addr),
+	     ntohs(addr.sin_port),
+	     CLIENTS_NUM(svr)+1,
+	     CLIENTS_NUM(svr)+1 == 1 ? "" : "s");
 
 	socklist_add(&svr->lst, fd, POLLIN|POLLOUT, &addr);
 }
@@ -432,11 +434,11 @@ void disconnect_client(struct server *svr, int pos)
 	if (TEMP_FAILURE_RETRY(close(svr->lst.fds[pos].fd)) == -1)
 		ERROR("close");
 
-	printf("%s:%hu disconnected, %d active client%s\n",
-	       inet_ntoa(svr->lst.infos[pos].addr.sin_addr),
-	       ntohs(svr->lst.infos[pos].addr.sin_port),
-	       CLIENTS_NUM(svr)-1,
-	       CLIENTS_NUM(svr)-1 == 1 ? "" : "s");
+	LOGF("%s:%hu disconnected, %d active client%s\n",
+	     inet_ntoa(svr->lst.infos[pos].addr.sin_addr),
+	     ntohs(svr->lst.infos[pos].addr.sin_port),
+	     CLIENTS_NUM(svr)-1,
+	     CLIENTS_NUM(svr)-1 == 1 ? "" : "s");
 
 	socklist_remove(&svr->lst, pos);
 }
@@ -461,6 +463,8 @@ void list_clients(struct server *svr)
 		printf("RX: %s\t", humanize_size(buf, SIZELEN, info->rx));
 		printf("TX: %s\n", humanize_size(buf, SIZELEN, info->tx));
 	}
+
+	fflush(stdout);
 }
 
 void serve_clients(struct server *svr)
