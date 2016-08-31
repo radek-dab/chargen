@@ -1,0 +1,9 @@
+[Unit]
+Description=Character Generator
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/chargen
+
+[Install]
+WantedBy=multi-user.target
