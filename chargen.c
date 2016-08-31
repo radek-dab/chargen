@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
@@ -15,6 +16,10 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 
+#define TCP 1
+#define UDP 2
+
+#define DEFPROTO	(TCP|UDP)
 #define DEFPORT		1919
 #define BACKLOG		5
 #define LSTCHUNK	1024
@@ -25,6 +30,7 @@
 #define LINENUM		(CHSETEND-CHSETBEG+1)
 #define PATSIZE		((LINELEN+2)*LINENUM)
 #define BUFSIZE		PATSIZE
+#define MAXDGRAM	512
 #define SIZELEN		16
 #define SAFEUSR		"nobody"
 #define SAFEGRP		"nobody"
@@ -41,6 +47,20 @@
 #define DEBUGF(...)
 #endif
 
+#if DEFPROTO & TCP
+#define DEFAULT_TCP	" (default)"
+#else
+#define DEFAULT_TCP
+#endif
+
+#if DEFPROTO & UDP
+#define DEFAULT_UDP	" (default)"
+#else
+#define DEFAULT_UDP
+#endif
+
+#define CLIENTS_NUM(svr) ((svr)->lst.num - CLIENTS_LIST)
+
 volatile sig_atomic_t running = 1;
 volatile sig_atomic_t listing = 0;
 
@@ -50,6 +70,7 @@ void set_signal_handler(void);
 void drop_privileges(void);
 
 struct config {
+	int proto;
 	unsigned short port;
 };
 
@@ -76,6 +97,7 @@ void socklist_clear(struct socklist *lst);
 
 enum server_list {
 	TCP_SERVICE,
+	UDP_SERVICE,
 	CLIENTS_LIST
 };
 
@@ -86,12 +108,14 @@ struct server {
 	char *buf;
 };
 
+int create_socket(int type, struct sockaddr_in *addr);
 void create_server(struct server *svr);
 void destroy_server(struct server *svr);
 void connect_client(struct server *svr);
 void disconnect_client(struct server *svr, int pos);
 void list_clients(struct server *svr);
 void serve_clients(struct server *svr);
+void serve_datagram(struct server *svr);
 char* create_pattern(void);
 char* humanize_size(char *buf, size_t len, size_t size);
 
@@ -103,6 +127,7 @@ int main(int argc, char *argv[])
 	parse_args(argc, argv, &svr.cfg);
 	create_server(&svr);
 	drop_privileges();
+	srand(time(NULL));
 
 	while (running) {
 		if (listing) {
@@ -117,6 +142,9 @@ int main(int argc, char *argv[])
 
 		if (svr.lst.fds[TCP_SERVICE].revents & POLLIN)
 			connect_client(&svr);
+
+		if (svr.lst.fds[UDP_SERVICE].revents & POLLIN)
+			serve_datagram(&svr);
 
 		serve_clients(&svr);
 	}
@@ -181,6 +209,8 @@ void display_usage(void)
 	     "Usage: chargen [OPTION]...\n"
 	     "\n"
 	     "Options:\n"
+	     "  -t, --tcp       TCP service"DEFAULT_TCP"\n"
+	     "  -u, --udp       UDP service"DEFAULT_UDP"\n"
 	     "  -p, --port=NUM  port number (default "XSTR(DEFPORT)")\n"
 	     "  -h, --help      display this help and exit\n"
 	     "\n"
@@ -194,19 +224,28 @@ void parse_args(int argc, char *argv[], struct config *cfg)
 {
 	assert(cfg != NULL);
 
-	static const char optstring[] = "p:h";
+	static const char optstring[] = "tup:h";
 	static const struct option longopts[] = {
+		{"tcp", no_argument, NULL, 't'},
+		{"udp", no_argument, NULL, 'u'},
 		{"port", required_argument, NULL, 'p'},
 		{"help", no_argument, NULL, 'h'},
 		{}
 	};
 	int ret;
 
+	cfg->proto = 0;
 	cfg->port = DEFPORT;
 
 	while ((ret = getopt_long(argc, argv,
 				  optstring, longopts, NULL)) != -1) {
 		switch (ret) {
+			case 't':
+				cfg->proto |= TCP;
+				break;
+			case 'u':
+				cfg->proto |= UDP;
+				break;
 			case 'p':
 				if (sscanf(optarg, "%hu", &cfg->port) != 1)
 					display_usage();
@@ -217,6 +256,9 @@ void parse_args(int argc, char *argv[], struct config *cfg)
 	}
 	if (optind < argc)
 		display_usage();
+
+	if (!cfg->proto)
+		cfg->proto = DEFPROTO;
 }
 
 void socklist_add(struct socklist *lst,
@@ -286,29 +328,57 @@ void socklist_clear(struct socklist *lst)
 	lst->cap = 0;
 }
 
-void create_server(struct server *svr)
+int create_socket(int type, struct sockaddr_in *addr)
 {
-	assert(svr != NULL);
+	assert(type == SOCK_STREAM || type == SOCK_DGRAM);
+	assert(addr != NULL);
 
-	struct sockaddr_in addr = {};
 	int reuseaddr = 1, fd;
 
-	if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
+	if ((fd = socket(PF_INET, type, 0)) == -1)
 		ERROR("socket");
 
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
 		       &reuseaddr, sizeof(reuseaddr)) == -1)
 		ERROR("setsockopt");
 
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(svr->cfg.port);
-	addr.sin_addr.s_addr = INADDR_ANY;
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
+	if (bind(fd, (struct sockaddr*)addr, sizeof(*addr)) == -1)
 		ERROR("bind");
 
-	if (listen(fd, BACKLOG) == -1)
-		ERROR("listen");
+	if (type == SOCK_STREAM) {
+		if (listen(fd, BACKLOG) == -1)
+			ERROR("listen");
+	}
 
+	return fd;
+}
+
+void create_server(struct server *svr)
+{
+	assert(svr != NULL);
+	assert(svr->lst.num == 0);
+
+	struct sockaddr_in addr = {};
+	int fd;
+
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(svr->cfg.port);
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (svr->cfg.proto & TCP) {
+		fd = create_socket(SOCK_STREAM, &addr);
+		printf("Started TCP service\n");
+	} else {
+		fd = -1;
+	}
+	socklist_add(&svr->lst, fd, POLLIN, &addr);
+
+	if (svr->cfg.proto & UDP) {
+		fd = create_socket(SOCK_DGRAM, &addr);
+		printf("Started UDP service\n");
+	} else {
+		fd = -1;
+	}
 	socklist_add(&svr->lst, fd, POLLIN, &addr);
 
 	svr->pat = create_pattern();
@@ -348,8 +418,8 @@ void connect_client(struct server *svr)
 	printf("%s:%hu connected, %d active client%s\n",
 	       inet_ntoa(addr.sin_addr),
 	       ntohs(addr.sin_port),
-	       svr->lst.num,
-	       svr->lst.num == 1 ? "" : "s");
+	       CLIENTS_NUM(svr)+1,
+	       CLIENTS_NUM(svr)+1 == 1 ? "" : "s");
 
 	socklist_add(&svr->lst, fd, POLLIN|POLLOUT, &addr);
 }
@@ -365,8 +435,8 @@ void disconnect_client(struct server *svr, int pos)
 	printf("%s:%hu disconnected, %d active client%s\n",
 	       inet_ntoa(svr->lst.infos[pos].addr.sin_addr),
 	       ntohs(svr->lst.infos[pos].addr.sin_port),
-	       svr->lst.num-2,
-	       svr->lst.num-2 == 1 ? "" : "s");
+	       CLIENTS_NUM(svr)-1,
+	       CLIENTS_NUM(svr)-1 == 1 ? "" : "s");
 
 	socklist_remove(&svr->lst, pos);
 }
@@ -380,8 +450,8 @@ void list_clients(struct server *svr)
 	int i;
 
 	printf("%d active client%s\n",
-	       svr->lst.num-1,
-	       svr->lst.num-1 == 1 ? "" : "s");
+	       CLIENTS_NUM(svr),
+	       CLIENTS_NUM(svr) == 1 ? "" : "s");
 
 	for (i = CLIENTS_LIST; i < svr->lst.num; i++) {
 		info = &svr->lst.infos[i];
@@ -437,6 +507,24 @@ void serve_clients(struct server *svr)
 			svr->lst.infos[i].tx += ret;
 		}
 	}
+}
+
+void serve_datagram(struct server *svr)
+{
+	int fd = svr->lst.fds[UDP_SERVICE].fd;
+	struct sockaddr_in addr;
+	socklen_t addrlen = sizeof(addr);
+	ssize_t size;
+
+	if (recvfrom(fd, svr->buf, BUFSIZE, 0, &addr, &addrlen) == -1)
+		ERROR("recvfrom");
+
+	size = rand() % (MAXDGRAM+1);
+	memcpy(svr->buf, svr->pat, size);
+	// TODO: End with CRLF
+
+	if (sendto(fd, svr->buf, size, 0, &addr, addrlen) == -1)
+		ERROR("sendto");
 }
 
 char* create_pattern(void)
