@@ -523,11 +523,21 @@ void serve_datagram(struct server *svr)
 	if (recvfrom(fd, svr->buf, BUFSIZE, 0, &addr, &addrlen) == -1)
 		ERROR("recvfrom");
 
-	size = rand() % (MAXDGRAM+1);
-	memcpy(svr->buf, svr->pat, size);
-	// TODO: End with CRLF
+	size = rand() % (MAXDGRAM-1);
+	svr->buf[0] = 0;
+	memcpy(svr->buf+1, svr->pat, size);
+	switch (svr->buf[size]) {
+		case '\n':
+			break;
+		case '\r':
+			svr->buf[++size] = '\n';
+			break;
+		default:
+			svr->buf[++size] = '\r';
+			svr->buf[++size] = '\n';
+	}
 
-	if (sendto(fd, svr->buf, size, 0, &addr, addrlen) == -1)
+	if (sendto(fd, svr->buf+1, size, 0, &addr, addrlen) == -1)
 		ERROR("sendto");
 }
 
