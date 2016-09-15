@@ -15,7 +15,7 @@ $(NAME): $(NAME).o
 $(NAME).o: $(NAME).c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-.PHONY: clean install uninstall
+.PHONY: clean install
 
 clean:
 	rm -f $(NAME) $(NAME).o
@@ -23,9 +23,4 @@ clean:
 install: $(NAME) $(NAME).service
 	$(INSTALL) -m755 $(NAME) $(BINDIR)
 	$(INSTALL) -m644 $(NAME).service $(UNITSDIR)
-	$(SYSTEMCTL) daemon-reload
-
-uninstall:
-	rm -f $(BINDIR)/$(NAME)
-	rm -f $(UNITSDIR)/$(NAME).service
 	$(SYSTEMCTL) daemon-reload
