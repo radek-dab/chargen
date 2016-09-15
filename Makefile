@@ -1,5 +1,6 @@
 CC=gcc
-CFLAGS=-g -Wall -DDEBUG
+#CFLAGS=-DDEBUG -Wall -g
+CFLAGS=-DNDEBUG -Wall -O3
 LIBS=
 NAME=chargen
 

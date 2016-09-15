@@ -20,7 +20,7 @@
 #define UDP 2
 
 #define DEFPROTO	(TCP|UDP)
-#define DEFPORT		1919
+#define DEFPORT		19
 #define BACKLOG		5
 #define LSTCHUNK	1024
 #define CHSETBEG	' '
