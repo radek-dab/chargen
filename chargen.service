@@ -3,7 +3,7 @@ Description=Character Generator
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/chargen
+ExecStart=/usr/local/bin/chargen
 
 [Install]
 WantedBy=multi-user.target

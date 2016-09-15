@@ -6,8 +6,8 @@ NAME=chargen
 
 INSTALL=install
 SYSTEMCTL=systemctl
-BINDIR=/usr/bin
-UNITSDIR=/usr/lib/systemd/system
+BINDIR=/usr/local/bin
+UNITSDIR=/usr/local/lib/systemd/system
 
 $(NAME): $(NAME).o
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
@@ -21,6 +21,6 @@ clean:
 	rm -f $(NAME) $(NAME).o
 
 install: $(NAME) $(NAME).service
-	$(INSTALL) -m755 $(NAME) $(BINDIR)
-	$(INSTALL) -m644 $(NAME).service $(UNITSDIR)
+	$(INSTALL) -Dm755 $(NAME) $(BINDIR)/$(NAME)
+	$(INSTALL) -Dm644 $(NAME).service $(UNITSDIR)/$(NAME).service
 	$(SYSTEMCTL) daemon-reload
