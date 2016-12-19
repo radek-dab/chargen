@@ -2,6 +2,8 @@
 
 Implementation of Character Generator Protocol ([RFC 864][1]) Written in C
 
+It is intended for **POSIX** compatible systems with **GNU** compiler.
+
 ## Build
 
 ```
