@@ -34,6 +34,7 @@
 #define SIZELEN		16
 #define SAFEUSR		"nobody"
 #define SAFEGRP		"nobody"
+#define SAFEGRP2	"nogroup"
 
 #define XSTR(s)		STR(s)
 #define STR(s)		#s
@@ -193,7 +194,9 @@ void drop_privileges(void)
 		return;
 
 	if ((grp = getgrnam(SAFEGRP)) == NULL)
-		ERROR("getgrnam");
+		if ((grp = getgrnam(SAFEGRP2)) == NULL)
+			ERROR("getgrnam");
+		
 	if (setgid(grp->gr_gid) == -1)
 		ERROR("setgid");
 
