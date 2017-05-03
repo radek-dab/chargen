@@ -39,6 +39,9 @@
 #define XSTR(s)		STR(s)
 #define STR(s)		#s
 
+#define RETRY(expr)	({ int ret; do ret = (int)(expr); \
+			while (ret && errno == EINTR); ret; })
+
 #define ERROR(s)	(fprintf(stderr, "%s:%d ", __FILE__, __LINE__), \
 			perror(s), kill(0, SIGTERM), exit(EXIT_FAILURE))
 
@@ -194,8 +197,7 @@ void drop_privileges(void)
 	if (getuid() != 0)
 		return;
 
-	// FIXME: getgrnam interrupted by signal
-	if ((grp = getgrnam(SAFEGRP)) == NULL) {
+	if (RETRY((grp = getgrnam(SAFEGRP)) == NULL)) {
 		if (errno) ERROR("getgrnam");
 		// SAFEGRP not found. Trying SAFEGRP2...
 		if ((grp = getgrnam(SAFEGRP2)) == NULL) {
@@ -208,8 +210,7 @@ void drop_privileges(void)
 	if (setgid(grp->gr_gid) == -1)
 		ERROR("setgid");
 
-	// FIXME: getpwnam interrupted by signal
-	if ((pwd = getpwnam(SAFEUSR)) == NULL) {
+	if (RETRY((pwd = getpwnam(SAFEUSR)) == NULL)) {
 		if (errno) ERROR("getpwnam");
 		LOGF("Unprivileged user not found. Exiting...\n");
 		running = 0;
@@ -413,7 +414,7 @@ void destroy_server(struct server *svr)
 	int i;
 
 	for (i = 0; i < svr->lst.num; i++)
-		if (TEMP_FAILURE_RETRY(close(svr->lst.fds[i].fd)) == -1)
+		if (RETRY(close(svr->lst.fds[i].fd) == -1))
 			ERROR("close");
 
 	socklist_clear(&svr->lst);
@@ -447,7 +448,7 @@ void disconnect_client(struct server *svr, int pos)
 	assert(svr != NULL);
 	assert(CLIENTS_LIST <= pos && pos < svr->lst.num);
 
-	if (TEMP_FAILURE_RETRY(close(svr->lst.fds[pos].fd)) == -1)
+	if (RETRY(close(svr->lst.fds[pos].fd) == -1))
 		ERROR("close");
 
 	LOGF("%s:%hu disconnected, %d active client%s\n",
