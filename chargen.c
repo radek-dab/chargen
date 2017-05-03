@@ -190,18 +190,31 @@ void drop_privileges(void)
 	struct group *grp;
 	struct passwd *pwd;
 
+	// Done if non-root user
 	if (getuid() != 0)
 		return;
 
-	if ((grp = getgrnam(SAFEGRP)) == NULL)
-		if ((grp = getgrnam(SAFEGRP2)) == NULL)
-			ERROR("getgrnam");
-		
+	// FIXME: getgrnam interrupted by signal
+	if ((grp = getgrnam(SAFEGRP)) == NULL) {
+		if (errno) ERROR("getgrnam");
+		// SAFEGRP not found. Trying SAFEGRP2...
+		if ((grp = getgrnam(SAFEGRP2)) == NULL) {
+			if (errno) ERROR("getgrnam");
+			LOGF("Unprivileged group not found. Exiting...\n");
+			running = 0;
+			return;
+		}
+	}
 	if (setgid(grp->gr_gid) == -1)
 		ERROR("setgid");
 
-	if ((pwd = getpwnam(SAFEUSR)) == NULL)
-		ERROR("getpwnam");
+	// FIXME: getpwnam interrupted by signal
+	if ((pwd = getpwnam(SAFEUSR)) == NULL) {
+		if (errno) ERROR("getpwnam");
+		LOGF("Unprivileged user not found. Exiting...\n");
+		running = 0;
+		return;
+	}
 	if (setuid(pwd->pw_uid) == -1)
 		ERROR("setuid");
 
